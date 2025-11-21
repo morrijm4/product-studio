@@ -19,7 +19,8 @@ python3 server.py
 
 To get the arrival times for a given route, you can make a request to
 `/route/<route_id>/arrivals` and can filter out stops with the `?stop_id=` query
-parameter. You can find stop\_ids in the `gtfs_subway/stops.txt` file.
+parameter. You can find stop\_ids in the
+[gtfs_subway/stops.txt](./gtfs_subway/stops.txt) file.
 
 For example, if you want to find the arrival times for Roosevelt Island use the
 following URL.
