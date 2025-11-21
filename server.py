@@ -79,7 +79,7 @@ def arrivals(route_id):
             if not stu.HasField("stop_id"):
                 continue
 
-            # Filter our stop IDs
+            # Filter out stop IDs
             if len(stop_ids) != 0 and stu.stop_id not in stop_ids:
                 continue
 

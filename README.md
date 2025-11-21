@@ -23,16 +23,10 @@ parameter. You can find stop\_ids in the
 [gtfs_subway/stops.txt](./gtfs_subway/stops.txt) file.
 
 For example, if you want to find the arrival times for Roosevelt Island use the
-following URL.
+following URL. You can put the URL in your browser to make a request
 
 ```url
 http://localhost:8080/route/F/arrivals?stop_id=B06S&stop_id=B06N
-```
-
-You can put the URL in your browser or you can execute the following command.
-
-```sh
-curl http://localhost:8080/route/F/arrivals?stop_id=B06S&stop_id=B06N
 ```
 
 Stop ID B06N and B06S are the IDs for Roosevelt Island Queens bound and
