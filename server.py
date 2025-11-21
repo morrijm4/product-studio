@@ -1,11 +1,42 @@
 from google.transit import gtfs_realtime_pb2
 from flask import Flask, request, abort
+import time
 import requests
 import datetime
-
+import threading
 
 app = Flask(__name__)
 
+_GTFS_CACHE = {}
+_GTFS_CACHE_LOCK = threading.Lock()
+
+# Minimum seconds between requests to the same feed
+MIN_REFRESH_INTERVAL = 10
+
+def get_feed(url):
+    now = time.time()
+
+    with _GTFS_CACHE_LOCK:
+        # If feed cached and still fresh → return cached copy
+        if url in _GTFS_CACHE:
+            last_ts = _GTFS_CACHE[url]["timestamp"]
+            if now - last_ts < MIN_REFRESH_INTERVAL:
+                return _GTFS_CACHE[url]["feed"]
+
+    feed = gtfs_realtime_pb2.FeedMessage()
+
+    response = requests.get(url)
+    response.raise_for_status()
+
+    feed.ParseFromString(response.content)
+
+    # Update cache
+    with _GTFS_CACHE_LOCK:
+        _GTFS_CACHE[url] = {
+            "timestamp": now,
+            "feed": feed,
+        }
+    return feed
 
 def epoch_to_time(ts):
     return datetime.datetime.fromtimestamp(ts).strftime("%H:%M:%S")
@@ -31,16 +62,6 @@ def build_feed_url(route_id):
             return url
         case _:
             return None
-
-
-def get_feed(url):
-    feed = gtfs_realtime_pb2.FeedMessage()
-
-    response = requests.get(url)
-    response.raise_for_status()
-
-    feed.ParseFromString(response.content)
-    return feed
 
 
 @app.route("/route/<route_id>/feed")
