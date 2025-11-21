@@ -3,6 +3,8 @@
 This repository is to experiment with requesting MTA real-time subway data
 through the GTFS real-time protocol and serving it through a HTTP server.
 
+Check out benchmarks [here](./benchmarks.md)
+
 ## Installation
 
 ```sh
@@ -37,4 +39,3 @@ Manhattan bound respectively.
 This is static information about the NYC subway system that can be joined with
 data from the real-time feed to extract meaningful information. This data was
 download from here: https://www.mta.info/developers.
-
