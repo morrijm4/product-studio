@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-
+from google.transit import gtfs_realtime_pb2
 from dotenv import load_dotenv
 load_dotenv(".env")
 
@@ -33,6 +33,8 @@ def fetch_one():
 
             # Convert memoryview -> bytes
             blob = bytes(blob_mv)
+            feed = gtfs_realtime_pb2.FeedMessage()
+            feed.ParseFromString(blob)
 
             print(f"id: {id_}")
             print(f"route_group: {route_group}")
@@ -40,6 +42,7 @@ def fetch_one():
             print(f"blob type: {type(blob)}")
             print(f"blob length: {len(blob)} bytes")
             print(f"first 50 bytes: {blob[:50]}")
+            print(f"data: {feed}")
     finally:
         conn.close()
 
