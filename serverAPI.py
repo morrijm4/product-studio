@@ -10,7 +10,7 @@ import psycopg2
 import psycopg2.extras
 import requests
 import gzip
-import hashlib
+import base64
 
 from flask import Flask, request, abort, jsonify, Response
 from google.transit import gtfs_realtime_pb2 as gtfs
@@ -23,7 +23,7 @@ app = Flask(__name__)
 # ----------------------------
 #  Database
 # ----------------------------
-DATABASE_URL = os.environ.get("NEON_DATABASE_URL")
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
 def get_db():
     return psycopg2.connect(DATABASE_URL)
@@ -145,90 +145,131 @@ def route_arrivals(route_id):
 @app.route("/db/raw", methods=["GET"])
 def db_list_raw():
     """
-    List all entries in the raw table (meta only).
-    Returns: id, route_group, created_at, data_hash, size_bytes
+    Query params:
+      - route_group=<str> (can appear multiple times)
+      - start_date=YYYY-MM-DD
+      - start_time=HH:MM:SS
+      - end_date=YYYY-MM-DD
+      - end_time=HH:MM:SS
+      - limit=<int> (default 50 if no filters; else 100)
+      - offset=<int>
+
+    If no params → return latest 50 rows.
     """
+
+    # ----------- Read query parameters -----------
+    route_groups = request.args.getlist("route_group")
+
+    start_date = request.args.get("start_date")  # "2025-12-02"
+    start_time = request.args.get("start_time")  # "04:49:16"
+
+    end_date = request.args.get("end_date")
+    end_time = request.args.get("end_time")
+
+    limit_param = request.args.get("limit")
+    offset_param = request.args.get("offset")
+
+    # ----------- Detect no filters -----------
+    no_filters = (
+        not route_groups
+        and not start_date and not start_time
+        and not end_date and not end_time
+        and not limit_param and not offset_param
+    )
+
+    if no_filters:
+        limit = 50
+        offset = 0
+    else:
+        limit = int(limit_param) if limit_param else 100
+        offset = int(offset_param) if offset_param else 0
+
+    # ----------- Build WHERE clause -----------
+    where_clauses = []
+    params: list = []
+
+    # route_group filter
+    if route_groups:
+        where_clauses.append("route_group = ANY(%s)")
+        params.append(route_groups)
+
+    # ----------- Build timestamp filters -----------
+    start_ts = None
+    end_ts = None
+
+    # today's date fallback if user only gives time
+    today = datetime.datetime.utcnow().date()
+
+    if start_date or start_time:
+        sd = start_date if start_date else today.isoformat()
+        st = start_time if start_time else "00:00:00"
+        start_ts = f"{sd} {st}"
+
+    if end_date or end_time:
+        ed = end_date if end_date else today.isoformat()
+        et = end_time if end_time else "23:59:59"
+        end_ts = f"{ed} {et}"
+
+    if start_ts and end_ts:
+        where_clauses.append("created_at BETWEEN %s AND %s")
+        params.extend([start_ts, end_ts])
+    elif start_ts:
+        where_clauses.append("created_at >= %s")
+        params.append(start_ts)
+    elif end_ts:
+        where_clauses.append("created_at <= %s")
+        params.append(end_ts)
+
+    # ----------- SQL assembly -----------
+    sql = """
+        SELECT
+            id,
+            route_group,
+            created_at,
+            octet_length(data) AS size_bytes
+        FROM raw
+    """
+
+    if where_clauses:
+        sql += " WHERE " + " AND ".join(where_clauses)
+
+    sql += " ORDER BY created_at DESC LIMIT %s OFFSET %s"
+    params.extend([limit, offset])
+
+    # ----------- Execute query -----------
     conn = get_db()
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute("""
-            SELECT
-                id,
-                route_group,
-                created_at,
-                data_hash,
-                octet_length(data) AS size_bytes
-            FROM raw
-            ORDER BY created_at DESC;
-        """)
+        cur.execute(sql, tuple(params))
         rows = cur.fetchall()
-        return jsonify(rows)
+
+        # Reformat created_at to match Neon UI
+        cleaned = []
+        for r in rows:
+            dt = r["created_at"]
+            cleaned.append({
+                "id": r["id"],
+                "route_group": r["route_group"],
+                "created_at": dt.strftime("%a, %d %b %Y %H:%M:%S GMT"),
+                "size_bytes": r["size_bytes"],
+            })
+
+        return jsonify(cleaned)
+
     finally:
         conn.close()
 
 
-@app.route("/db/raw/<int:row_id>", methods=["GET"])
-def db_get_raw(row_id):
-    """
-    Get a single row's metadata.
-    Optional: ?include_data=true returns base64 of compressed data as `data_b64`.
-    """
-    include_data = request.args.get("include_data", "false").lower() == "true"
-
-    conn = get_db()
-    try:
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute("""
-            SELECT
-                id,
-                route_group,
-                created_at,
-                data_hash,
-                octet_length(data) AS size_bytes,
-                data
-            FROM raw
-            WHERE id = %s;
-        """, (row_id,))
-        row = cur.fetchone()
-        if not row:
-            abort(404, description="Row not found")
-
-        # Convert memoryview -> bytes
-        blob = bytes(row["data"])
-        del row["data"]
-
-        if include_data:
-            import base64
-            row["data_b64"] = base64.b64encode(blob).decode("ascii")
-
-        return jsonify(row)
-    finally:
-        conn.close()
 
 
-@app.route("/db/raw/<int:row_id>/compressed", methods=["GET"])
-def db_get_raw_compressed(row_id):
-    """
-    Return the compressed binary blob exactly as stored in BYTEA.
-    """
-    conn = get_db()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT data FROM raw WHERE id = %s;", (row_id,))
-        row = cur.fetchone()
-        if not row:
-            abort(404, description="Row not found")
-
-        blob = bytes(row[0])  # memoryview -> bytes
-        return Response(blob, mimetype="application/octet-stream")
-    finally:
-        conn.close()
-
-
-@app.route("/db/raw/<int:row_id>/protobuf", methods=["GET"])
+@app.route("/db/raw/<int:row_id>/protobuf_raw", methods=["GET"])
 def db_get_raw_protobuf(row_id):
     """
-    Return the decompressed protobuf bytes from a stored compressed blob.
+    Return the **decompressed** protobuf bytes from a stored compressed blob.
+
+    Response:
+      - Content-Type: application/octet-stream
+      - Body: raw protobuf (FeedMessage serialized bytes)
     """
     conn = get_db()
     try:
@@ -238,66 +279,16 @@ def db_get_raw_protobuf(row_id):
         if not row:
             abort(404, description="Row not found")
 
-        compressed = bytes(row[0])
+        compressed = bytes(row[0])        # BYTEA -> bytes
         decompressed = gzip.decompress(compressed)
-        return Response(decompressed, mimetype="application/octet-stream")
+
+        return Response(
+            decompressed,
+            mimetype="application/octet-stream"
+        )
     finally:
         conn.close()
 
-
-@app.route("/db/raw/<int:row_id>/arrivals", methods=["GET"])
-def db_get_raw_arrivals(row_id):
-    """
-    Parse a stored snapshot, return arrivals from that feed.
-    Optional query params:
-      - route_id=<route>
-      - stop_id=<id> (can appear multiple times)
-    """
-    route_filter = request.args.get("route_id")
-    stop_ids = request.args.getlist("stop_id")
-
-    conn = get_db()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT data FROM raw WHERE id = %s;", (row_id,))
-        row = cur.fetchone()
-        if not row:
-            abort(404, description="Row not found")
-
-        compressed = bytes(row[0])
-        decompressed = gzip.decompress(compressed)
-
-        feed = gtfs.FeedMessage()
-        feed.ParseFromString(decompressed)
-
-        results = []
-
-        for ent in feed.entity:
-            if not ent.HasField("trip_update"):
-                continue
-            trip = ent.trip_update.trip
-
-            if route_filter and trip.route_id != route_filter:
-                continue
-
-            for stu in ent.trip_update.stop_time_update:
-                if not stu.HasField("stop_id"):
-                    continue
-                if stop_ids and stu.stop_id not in stop_ids:
-                    continue
-                if stu.HasField("arrival"):
-                    results.append({
-                        "trip_id": trip.trip_id,
-                        "route_id": trip.route_id,
-                        "stop_id": stu.stop_id,
-                        "arrival_epoch": stu.arrival.time,
-                        "arrival_time": epoch_to_time(stu.arrival.time),
-                    })
-
-        results.sort(key=lambda x: (x["stop_id"], x["arrival_epoch"]))
-        return jsonify(results)
-    finally:
-        conn.close()
 
 # ----------------------------
 #  Run server
