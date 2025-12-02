@@ -5,11 +5,12 @@ from dotenv import load_dotenv
 
 # Load DATABASE_URL from .env
 load_dotenv()
-conn_string = os.getenv("DATABASE_URL")
+conn_string = os.getenv("NEON_DATABASE_URL")
 if not conn_string:
     raise RuntimeError("Please set DATABASE_URL in .env")
 
-GTFS_FOLDER = "/Users/iqrakhan/Documents/Product Studio/product-studio/gtfs_subway"
+GTFS_FOLDER = "./gtfs_subway"
+
 
 def load_gtfs_file(filename, conn):
     table_name = filename.replace(".txt", "")  # e.g. agency.txt → agency
@@ -40,6 +41,7 @@ def load_gtfs_file(filename, conn):
 
         print(f"✓ Finished loading {filename}")
 
+
 def main():
     # List of GTFS files to load
     gtfs_files = [
@@ -51,7 +53,7 @@ def main():
         "stop_times.txt",
         "stops.txt",
         "transfers.txt",
-        "trips.txt"
+        "trips.txt",
     ]
 
     with psycopg.connect(conn_string) as conn:
@@ -60,6 +62,7 @@ def main():
 
         conn.commit()
         print("\nALL GTFS FILES LOADED SUCCESSFULLY!")
+
 
 if __name__ == "__main__":
     main()
